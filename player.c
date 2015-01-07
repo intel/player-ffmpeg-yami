@@ -1,5 +1,5 @@
 /*
- *  player.c - example player for ffmpeg
+ *  player.c - example player for ffmpeg-yami
  *
  *  Copyright (C) 2015 Intel Corporation
  *    Author: Zhao, Halley<halley.zhao@intel.com>
@@ -20,13 +20,12 @@
  *  Boston, MA 02110-1301 USA
  */
 
-// gcc player.c `pkg-config --cflags --libs libavformat libavcodec libavutil` -o player
-
-#include <stdio.h>
 #include <string.h>
-#include <assert.h>
+#include <unistd.h>
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/frame.h>
+#include "video_gl_render.h"
 #if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(55, 28, 1)
     #define av_frame_alloc avcodec_alloc_frame
     #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(54, 28, 0)
@@ -36,19 +35,46 @@
     #endif
 #endif
 
-#define PRINTF printf
-#define DEBUG(format, ...)   printf("  %s, %d, " format, __FILE__, __LINE__, ##__VA_ARGS__)
-#define ERROR(format, ...) fprintf(stderr, "!!ERROR  %s, %d, " format, __FILE__, __LINE__, ##__VA_ARGS__)
-
-#ifndef ASSERT
-#define ASSERT(expr) do {                                                                                               \
-        if (!(expr))                                                                                                    \
-            ERROR();                                                                                                    \
-        assert(expr);                                                                                                   \
-    } while(0)
-#endif
-
 static char* input_file = NULL;
+static int render_mode = 0;
+
+static void print_help(const char* app)
+{
+    PRINTF("%s <options>\n", app);
+    PRINTF("   -i media file to decode\n");
+    PRINTF("   -m <render mode>\n");
+    PRINTF("      0: dump video frame to file\n");
+    PRINTF("      1: upload raw video frame (Y) as texture\n");
+    PRINTF("      2: texture: export video frame as drm name (RGBX) + texture from drm name\n");
+    PRINTF("      3: texture: export video frame as dma_buf(RGBX) + texutre from dma_buf\n");
+}
+
+static int process_cmdline(int argc, char *argv[])
+{
+    char opt;
+
+    while ((opt = getopt(argc, argv, "h:m:i:?")) != -1)
+    {
+        switch (opt) {
+        case 'h':
+        case '?':
+            print_help (argv[0]);
+            return -1;
+        case 'i':
+            input_file = optarg;
+            break;
+        case 'm':
+            render_mode = atoi(optarg);
+            break;
+        default:
+            print_help(argv[0]);
+            break;
+        }
+    }
+    PRINTF("input file: %s, render_mode: %d\n", input_file, render_mode);
+
+    return 0;
+}
 
 int main(int argc, char *argv[])
 {
@@ -60,13 +86,15 @@ int main(int argc, char *argv[])
     int decode_count = 0;
     int render_count = 0;
     int video_stream_index = -1, i;
+    uint8_t *frame_copy = NULL;
     FILE *dump_yuv = NULL;
 
-    if (argc<2) {
-        ERROR("no input file\n");
+    // parse command line parameters
+    process_cmdline(argc, argv);
+    if (!input_file) {
+        ERROR("no input file specified\n");
         return -1;
     }
-    input_file = argv[1];
 
     // libav* init
     av_register_all();
@@ -95,6 +123,7 @@ int main(int argc, char *argv[])
 
     // open video codec
     video_dec = avcodec_find_decoder(video_dec_ctx->codec_id);
+    video_dec_ctx->coder_type = render_mode ? render_mode -1 : render_mode; // specify output frame type
     if (avcodec_open2(video_dec_ctx, video_dec, NULL) < 0) {
         ERROR("fail to open codec\n");
         return -1;
@@ -127,32 +156,65 @@ int main(int argc, char *argv[])
 
             decode_count++;
             if (got_picture) {
-                // assumed I420 format
-                int height[3] = {video_dec_ctx->height, video_dec_ctx->height/2, video_dec_ctx->height/2};
-                int width[3] = {video_dec_ctx->width, video_dec_ctx->width/2, video_dec_ctx->width/2};
-                int plane, row;
+                switch (render_mode) {
+                case 0: // dump raw video frame to disk file
+                case 1: { // draw raw frame data as texture
+                    // assumed I420 format
+                    int height[3] = {video_dec_ctx->height, video_dec_ctx->height/2, video_dec_ctx->height/2};
+                    int width[3] = {video_dec_ctx->width, video_dec_ctx->width/2, video_dec_ctx->width/2};
+                    int plane, row;
 
-                if (!dump_yuv) {
-                    char out_file[256];
-                    sprintf(out_file, "./dump_%dx%d.I420", video_dec_ctx->width, video_dec_ctx->height);
-                    dump_yuv = fopen(out_file, "ab");
-                    if (!dump_yuv) {
-                        ERROR("fail to create file for dumped yuv data\n");
-                        return -1;
-                    }
-                    for (plane=0; plane<3; plane++) {
-                        for (row = 0; row<height[plane]; row++)
-                            fwrite(frame->data[plane]+ row*frame->linesize[plane], width[plane], 1, dump_yuv);
+                    if (render_mode == 0) {
+                        if (!dump_yuv) {
+                            char out_file[256];
+                            sprintf(out_file, "./dump_%dx%d.I420", video_dec_ctx->width, video_dec_ctx->height);
+                            dump_yuv = fopen(out_file, "ab");
+                            if (!dump_yuv) {
+                                ERROR("fail to create file for dumped yuv data\n");
+                                return -1;
+                            }
+                        }
+                        for (plane=0; plane<3; plane++) {
+                            for (row = 0; row<height[plane]; row++)
+                                fwrite(frame->data[plane]+ row*frame->linesize[plane], width[plane], 1, dump_yuv);
+                        }
+                    } else {
+                        // glTexImage2D  doesn't handle pitch, make a copy of video data
+                        frame_copy = malloc(video_dec_ctx->height * video_dec_ctx->width * 3 / 2);
+                        unsigned char* ptr = frame_copy;
+
+                        for (plane=0; plane<3; plane++) {
+                            for (row=0; row<height[plane]; row++) {
+                                memcpy(ptr, frame->data[plane]+row*frame->linesize[plane], width[plane]);
+                                ptr += width[plane];
+                            }
+                        }
+
+                        drawVideo((uintptr_t)frame_copy, 0, video_dec_ctx->width, video_dec_ctx->height, 0);
                     }
                 }
+                    break;
+                case 2: // draw video frame as texture with drm handle
+                case 3: // draw video frame as texture with dma_buf handle
+                    drawVideo((uintptr_t)frame->data[0], render_mode -1, video_dec_ctx->width, video_dec_ctx->height, (uintptr_t)frame->data[1]);
+                    break;
+                default:
+                    break;
+                }
                 render_count++;
-                av_frame_free(&frame);
             }
         }
     }
+
+    if (frame)
+        av_frame_free(&frame);
+    if (frame_copy)
+        free(frame_copy);
     if (dump_yuv)
         fclose(dump_yuv);
+    deinit_egl();
     PRINTF("decode %s ok, decode_count=%d, render_count=%d\n", input_file, decode_count, render_count);
+
     return 0;
 }
 
