@@ -32,8 +32,12 @@ int drawVideo(uintptr_t handle, int type, uint32_t width, uint32_t height, uint3
 // int init_egl(uint32_t width, uint32_t height, int is_dmabuf);
 int deinit_egl();
 
-#define PRINTF printf
+#ifdef PLAYER_DEBUG
 #define DEBUG(format, ...)   printf("  %s, %d, " format, __FILE__, __LINE__, ##__VA_ARGS__)
+#else
+#define DEBUG(...)
+#endif
+#define PRINTF printf
 #define ERROR(format, ...) fprintf(stderr, "!!ERROR  %s, %d, " format, __FILE__, __LINE__, ##__VA_ARGS__)
 
 #ifndef ASSERT
