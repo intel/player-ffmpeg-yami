@@ -196,7 +196,7 @@ int main(int argc, char *argv[])
                     break;
                 case 2: // draw video frame as texture with drm handle
                 case 3: // draw video frame as texture with dma_buf handle
-                    drawVideo((uintptr_t)frame->data[0], render_mode -1, video_dec_ctx->width, video_dec_ctx->height, (uintptr_t)frame->linesize[0]);
+                    drawVideo((uintptr_t)frame->data[0], render_mode -1, video_dec_ctx->width, video_dec_ctx->height, (uintptr_t)frame->data[1]);
                     break;
                 default:
                     break;

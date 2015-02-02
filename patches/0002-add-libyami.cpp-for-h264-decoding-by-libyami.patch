@@ -1,7 +1,7 @@
-From f624afbc8d1c69ae25926c836662138a651aa251 Mon Sep 17 00:00:00 2001
+From 750fd79fe656c34efc5ee167ef552ae7a9bfc502 Mon Sep 17 00:00:00 2001
 From: "Zhao, Halley" <halley.zhao@intel.com>
 Date: Tue, 6 Jan 2015 16:51:47 +0800
-Subject: [PATCH 2/2 v2] add libyami.cpp for h264 decoding by libyami
+Subject: [PATCH 2/2] add libyami.cpp for h264 decoding by libyami
 
 - do not support multi-thread decoding, it is unnecessary for hw
 - create a decode thread to interface with yami decoding, decouple
@@ -12,16 +12,16 @@ Subject: [PATCH 2/2 v2] add libyami.cpp for h264 decoding by libyami
   registered to AVBufferRef. then it is recycle when AVFrame/AVBufferRef
   is unref'ed.
 ---
- libavcodec/libyami.cpp | 383 +++++++++++++++++++++++++++++++++++++++++++++++++
- 1 file changed, 383 insertions(+)
+ libavcodec/libyami.cpp | 386 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 386 insertions(+)
  create mode 100644 libavcodec/libyami.cpp
 
 diff --git a/libavcodec/libyami.cpp b/libavcodec/libyami.cpp
 new file mode 100644
-index 0000000..0d612e3
+index 0000000..e944cde
 --- /dev/null
 +++ b/libavcodec/libyami.cpp
-@@ -0,0 +1,383 @@
+@@ -0,0 +1,386 @@
 +/*
 + * libyami.cpp -- h264 decoder uses libyami
 + *
@@ -181,8 +181,6 @@ index 0000000..0d612e3
 +        PRINT_DECODE_THREAD("decode() status=%d, decode_count_yami=%d\n", status, s->decode_count_yami);
 +
 +        if (DECODE_FORMAT_CHANGE == status) {
-+            // TODO, move the resolution/format check to yami_init() after yami decoder->start() accepts both avcC and byte stream(sps/pps),
-+            // and got updated resolution/format there
 +            s->format_info = s->decoder->getFormatInfo();
 +            PRINT_DECODE_THREAD("decode format change %dx%d\n",s->format_info->width,s->format_info->height);
 +            // resend the buffer
@@ -232,16 +230,20 @@ index 0000000..0d612e3
 +    in_buffer->data = avpkt->data;
 +    in_buffer->size = avpkt->size;
 +    in_buffer->timeStamp = avpkt->pts;
-+    if (s->decode_status < DECODE_THREAD_GOT_EOS) { // we needn't enque eos buffer more than once
++    while (s->decode_status < DECODE_THREAD_GOT_EOS) { // we need enque eos buffer more than once
 +        pthread_mutex_lock(&s->in_mutex);
-+            s->in_queue->push_back(in_buffer);
-+            av_log(avctx, AV_LOG_VERBOSE, "wakeup decode thread ...\n");
-+            pthread_cond_signal(&s->in_cond);
-+            pthread_mutex_unlock(&s->in_mutex);
++            if (s->in_queue->size()<4) {
++                s->in_queue->push_back(in_buffer);
++                av_log(avctx, AV_LOG_VERBOSE, "wakeup decode thread ...\n");
++                pthread_cond_signal(&s->in_cond);
++                pthread_mutex_unlock(&s->in_mutex);
++                break;
++            }
 +        pthread_mutex_unlock(&s->in_mutex);
 +
 +        av_log(avctx, AV_LOG_DEBUG, "s->in_queue->size()=%ld, s->decode_count=%d, s->decode_count_yami=%d, too many buffer are under decoding, wait ...\n",
 +        s->in_queue->size(), s->decode_count, s->decode_count_yami);
++        usleep(10000);
 +    };
 +    s->decode_count++;
 +
@@ -307,8 +309,9 @@ index 0000000..0d612e3
 +
 +    // process the output frame
 +    if (s->output_type == VIDEO_DATA_MEMORY_TYPE_DRM_NAME || s->output_type == VIDEO_DATA_MEMORY_TYPE_DMA_BUF) {
++        frame = (AVFrame*)data;
 +        frame->data[0] = (uint8_t*)yami_frame->handle;
-+        frame->linesize[0] = yami_frame->pitch[0];
++        frame->data[1] = (uint8_t*)yami_frame->pitch[0];
 +        ((AVFrame*)data)->extended_data = ((AVFrame*)data)->data;
 +    }else {
 +        AVFrame *vframe = av_frame_alloc();
@@ -405,6 +408,6 @@ index 0000000..0d612e3
 +    .close                  = yami_close,
 +    .flush                  = NULL, // TODO, add it
 +};
--- 
+--
 1.8.3.2
 
