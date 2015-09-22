@@ -1,0 +1,25 @@
+From 79a5958a83f395ff7f93d8f4e1caec1009d09c36 Mon Sep 17 00:00:00 2001
+From: jkyu <jiankang.yu@intel.com>
+Date: Tue, 22 Sep 2015 01:07:01 -0400
+Subject: [PATCH] add --enable-libyami to ffmpeg build options
+
+---
+ scripts/ffmpeg-config | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/scripts/ffmpeg-config b/scripts/ffmpeg-config
+index b83bfe9..cf7850c 100755
+--- a/scripts/ffmpeg-config
++++ b/scripts/ffmpeg-config
+@@ -7,7 +7,7 @@ USER_OPTS="$@"
+ if test -f "$BUILD"/ffmpeg_options ; then
+     USER_OPTS="$(cat "$BUILD"/ffmpeg_options) $USER_OPTS"
+ fi
+-OPTIONS="--enable-gpl --disable-debug --disable-doc"
++OPTIONS="--enable-gpl --enable-libyami --disable-debug --disable-doc"
+
+ if "$BUILD"/scripts/test-libmpv ; then
+     OPTIONS="$OPTIONS --enable-pic"
+--
+1.9.1
+

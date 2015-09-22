@@ -1,0 +1,430 @@
+From befe5a82472c3d43b3a50caa5bba4b0b90762df4 Mon Sep 17 00:00:00 2001
+From: jkyu <jiankang.yu@intel.com>
+Date: Tue, 22 Sep 2015 00:35:27 -0400
+Subject: [PATCH] avcodec/h264: enable libyami h264 decoder
+
+---
+ configure              |  17 ++-
+ libavcodec/Makefile    |   2 +
+ libavcodec/allcodecs.c |   3 +
+ libavcodec/libyami.cpp | 308 +++++++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 325 insertions(+), 5 deletions(-)
+ mode change 100644 => 100755 libavcodec/Makefile
+ mode change 100644 => 100755 libavcodec/allcodecs.c
+ create mode 100755 libavcodec/libyami.cpp
+
+diff --git a/configure b/configure
+index 806e2e9..4f684c9 100755
+--- a/configure
++++ b/configure
+@@ -243,6 +243,7 @@ External library support:
+   --enable-libspeex        enable Speex de/encoding via libspeex [no]
+   --enable-libssh          enable SFTP protocol via libssh [no]
+   --enable-libstagefright-h264  enable H.264 decoding via libstagefright [no]
++  --enable-libyami         enable H.264 decoding via libyami [no]
+   --enable-libtheora       enable Theora encoding via libtheora [no]
+   --enable-libtwolame      enable MP2 encoding via libtwolame [no]
+   --enable-libutvideo      enable Ut Video encoding and decoding via libutvideo [no]
+@@ -1051,7 +1052,8 @@ check_func_headers(){
+             echo "long check_$func(void) { return (long) $func; }"
+         done
+         echo "int main(void) { return 0; }"
+-    } | check_ld "cc" "$@" && enable $funcs && enable_safe $headers
++    ## both C++/C header check goes here, use 'cxx'
++    } | check_ld "cxx" "$@" && enable $funcs && enable_safe $headers
+ }
+ 
+ check_class_headers_cpp(){
+@@ -1112,14 +1114,15 @@ check_lib_cpp(){
+ 
+ check_pkg_config(){
+     log check_pkg_config "$@"
+-    pkgandversion="$1"
++    ## one component may depend on multiple pkgs
++    allpkgs="$1"
+     pkg="${1%% *}"
+     headers="$2"
+     funcs="$3"
+     shift 3
+-    check_cmd $pkg_config --exists --print-errors $pkgandversion || return
+-    pkg_cflags=$($pkg_config --cflags $pkg_config_flags $pkg)
+-    pkg_libs=$($pkg_config --libs $pkg_config_flags $pkg)
++    check_cmd $pkg_config --exists --print-errors $allpkgs || return
++    pkg_cflags=$($pkg_config --cflags $pkg_config_flags $allpkgs)
++    pkg_libs=$($pkg_config --libs $pkg_config_flags $allpkgs)
+     check_func_headers "$headers" "$funcs" $pkg_cflags $pkg_libs "$@" &&
+         set_safe "${pkg}_cflags" $pkg_cflags   &&
+         set_safe "${pkg}_libs"   $pkg_libs
+@@ -1400,6 +1403,7 @@ EXTERNAL_LIBRARY_LIST="
+     libspeex
+     libssh
+     libstagefright_h264
++    libyami
+     libtheora
+     libtwolame
+     libutvideo
+@@ -2460,6 +2464,8 @@ libspeex_decoder_deps="libspeex"
+ libspeex_encoder_deps="libspeex"
+ libspeex_encoder_select="audio_frame_queue"
+ libstagefright_h264_decoder_deps="libstagefright_h264"
++libyami_h264_decoder_deps="libyami"
++libyami_hevc_decoder_deps="libyami"
+ libtheora_encoder_deps="libtheora"
+ libtwolame_encoder_deps="libtwolame"
+ libvo_aacenc_encoder_deps="libvo_aacenc"
+@@ -5131,6 +5137,7 @@ enabled libspeex          && require_pkg_config speex speex/speex.h speex_decode
+ enabled libstagefright_h264 && require_cpp libstagefright_h264 "binder/ProcessState.h media/stagefright/MetaData.h
+     media/stagefright/MediaBufferGroup.h media/stagefright/MediaDebug.h media/stagefright/MediaDefs.h
+     media/stagefright/OMXClient.h media/stagefright/OMXCodec.h" android::OMXClient -lstagefright -lmedia -lutils -lbinder -lgnustl_static
++enabled libyami           && require_pkg_config "libyami_decoder libva libyami_vpp libva-drm" VideoDecoderHost.h createVideoDecoder && add_extralibs "-lstdc++ -Wl,--no-as-needed -ldl"
+ enabled libtheora         && require libtheora theora/theoraenc.h th_info_init -ltheoraenc -ltheoradec -logg
+ enabled libtwolame        && require libtwolame twolame.h twolame_init -ltwolame &&
+                              { check_lib twolame.h twolame_encode_buffer_float32_interleaved -ltwolame ||
+diff --git a/libavcodec/Makefile b/libavcodec/Makefile
+old mode 100644
+new mode 100755
+index bfd6425..9105e8f
+--- a/libavcodec/Makefile
++++ b/libavcodec/Makefile
+@@ -776,6 +776,8 @@ OBJS-$(CONFIG_LIBSHINE_ENCODER)           += libshine.o
+ OBJS-$(CONFIG_LIBSPEEX_DECODER)           += libspeexdec.o
+ OBJS-$(CONFIG_LIBSPEEX_ENCODER)           += libspeexenc.o
+ OBJS-$(CONFIG_LIBSTAGEFRIGHT_H264_DECODER)+= libstagefright.o
++OBJS-$(CONFIG_LIBYAMI_H264_DECODER)       += libyami.o
++OBJS-$(CONFIG_LIBYAMI_HEVC_DECODER)       += libyami.o
+ OBJS-$(CONFIG_LIBTHEORA_ENCODER)          += libtheoraenc.o
+ OBJS-$(CONFIG_LIBTWOLAME_ENCODER)         += libtwolame.o
+ OBJS-$(CONFIG_LIBUTVIDEO_DECODER)         += libutvideodec.o
+diff --git a/libavcodec/allcodecs.c b/libavcodec/allcodecs.c
+old mode 100644
+new mode 100755
+index ce97746..2f79c47
+--- a/libavcodec/allcodecs.c
++++ b/libavcodec/allcodecs.c
+@@ -105,6 +105,9 @@ void avcodec_register_all(void)
+     REGISTER_HWACCEL(WMV3_VDPAU,        wmv3_vdpau);
+ 
+     /* video codecs */
++    REGISTER_DECODER(LIBYAMI_H264,      libyami_h264);
++    REGISTER_DECODER(LIBYAMI_HEVC,      libyami_hevc);
++
+     REGISTER_ENCODER(A64MULTI,          a64multi);
+     REGISTER_ENCODER(A64MULTI5,         a64multi5);
+     REGISTER_DECODER(AASC,              aasc);
+diff --git a/libavcodec/libyami.cpp b/libavcodec/libyami.cpp
+new file mode 100755
+index 0000000..6b2e583
+--- /dev/null
++++ b/libavcodec/libyami.cpp
+@@ -0,0 +1,308 @@
++/*
++ * libyami.cpp -- decoder uses libyami
++ *
++ *  Copyright (C) 2014 Intel Corporation
++ *    Author: Yu Jiankang<jiankang.yu@intel.com>
++ *
++ * This file is part of FFmpeg.
++ *
++ * FFmpeg is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * FFmpeg is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with FFmpeg; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
++ */
++#include <pthread.h>
++#include <unistd.h>
++#include <assert.h>
++#include <deque>
++extern "C" {
++#include "avcodec.h"
++#include "libavutil/imgutils.h"
++#include "internal.h"
++#include "libavcodec/vaapi.h"
++}
++#include "VideoDecoderHost.h"
++#include "VideoPostProcessHost.h"
++
++
++using namespace YamiMediaCodec;
++
++struct YamiContext {
++    AVCodecContext *avctx;
++    SharedPtr<IVideoDecoder> decoder;
++    SharedPtr<NativeDisplay> nativeDisplay;
++    SharedPtr<IVideoPostProcess> vpp;
++
++    // debug use
++    int decode_count;
++    int decode_count_yami;
++    int render_count;
++};
++
++struct MimeEntry
++{
++    AVCodecID id;
++    const char* mime;
++};
++
++#ifndef N_ELEMENTS
++#define N_ELEMENTS(array) (sizeof(array)/sizeof(array[0]))
++#endif
++
++static const MimeEntry MimeEntrys[] = {
++    AV_CODEC_ID_VP8, YAMI_MIME_VP8,
++
++#if LIBAVCODEC_VERSION_INT > AV_VERSION_INT(54, 40, 0)
++    AV_CODEC_ID_VP9, YAMI_MIME_VP9,
++#endif
++
++    AV_CODEC_ID_H264, YAMI_MIME_H264,
++    AV_CODEC_ID_H265, YAMI_MIME_H265
++};
++
++const char * getMimeType(AVCodecID codec_id)
++{
++    for (int i = 0; i < N_ELEMENTS(MimeEntrys); i++) {
++        if (MimeEntrys[i].id == codec_id) {
++            return MimeEntrys[i].mime;
++        }
++    }
++    return "unknow";
++}
++
++ bool initDisplay(AVCodecContext *avctx)
++{
++    YamiContext *s = (YamiContext*)avctx->priv_data;
++    struct vaapi_context *vactx = (struct vaapi_context *)(avctx->hwaccel_context);
++    s->nativeDisplay.reset(new NativeDisplay);
++    s->nativeDisplay->type = NATIVE_DISPLAY_VA;
++    s->nativeDisplay->handle = (intptr_t)(vactx->display);
++
++    return true;
++}
++
++static av_cold int yami_init(AVCodecContext *avctx)
++{
++    YamiContext *s = (YamiContext*)avctx->priv_data;
++    Decode_Status status;
++    VideoConfigBuffer config_buffer;
++    enum AVPixelFormat choices = AV_PIX_FMT_VAAPI_VLD;
++    struct vaapi_context *vactx = (struct vaapi_context *)(avctx->hwaccel_context);
++
++    s->decoder.reset(createVideoDecoder(getMimeType(avctx->codec_id)), releaseVideoDecoder);
++    if (!(s->decoder)) {
++        av_log(avctx, AV_LOG_ERROR, "fail to create libyami decoder\n");
++        return -1;
++    }
++
++    if((avctx->get_buffer2 != avcodec_default_get_buffer2) &&(avctx->get_buffer2 != NULL)) {
++        initDisplay(avctx);
++        s->decoder ->setNativeDisplay((s->nativeDisplay).get());
++    }
++
++    memset(&config_buffer,0,sizeof(VideoConfigBuffer));
++    if (avctx->extradata && avctx->extradata_size && avctx->extradata[0] == 1) {
++        config_buffer.data = avctx->extradata;
++        config_buffer.size = avctx->extradata_size;
++    }
++    config_buffer.profile = VAProfileNone;
++    status = s->decoder->start(&config_buffer);
++    if (status != DECODE_SUCCESS) {
++        av_log(avctx, AV_LOG_ERROR, "yami h264 decoder fail to start\n");
++        return -1;
++    }
++
++    s->decode_count = 0;
++    s->decode_count_yami = 0;
++    s->render_count = 0;
++
++    avctx->get_format(avctx, &choices);
++
++    return 0;
++}
++
++static Decode_Status decodeBuffer(void *arg, VideoDecodeBuffer *in_buffer)
++{
++    AVCodecContext *avctx = (AVCodecContext*)arg;
++    YamiContext *s = (YamiContext*)avctx->priv_data;
++    Decode_Status status;
++
++    // decode one input buffer
++    if (in_buffer->data) {
++        status = s->decoder->decode(in_buffer);
++    }
++
++    if (DECODE_FORMAT_CHANGE == status) {
++        // resend the buffer
++        status = s->decoder->decode(in_buffer);
++    }
++
++    if (in_buffer->data)
++        s->decode_count_yami++;
++
++    return status;
++}
++
++static int yami_decode_frame(AVCodecContext *avctx, void *data /* output frame */,
++                                    int *got_frame, AVPacket *avpkt /* input compressed data*/)
++{
++    YamiStatus ret;
++    SharedPtr<VideoFrame> frame;
++    Decode_Status status;
++    AVFrame get_frame;
++    YamiContext *s = (YamiContext*)avctx->priv_data;
++    const VideoRenderBuffer* out_frame;
++    VideoDecodeBuffer in_buffer;
++    if ((!s->vpp) &&(avctx->get_buffer2 != avcodec_default_get_buffer2) &&(avctx->get_buffer2 != NULL)) {
++        s->vpp.reset(createVideoPostProcess(YAMI_VPP_SCALER), releaseVideoPostProcess);
++        if (!(s->vpp)) {
++            return -1;
++        }
++        if (s->vpp->setNativeDisplay(*(s->nativeDisplay)) != YAMI_SUCCESS) {
++            return -1;
++        }
++    }
++
++    // append avpkt to input buffer queue
++    in_buffer.data = avpkt->data;
++    in_buffer.size = avpkt->size;
++    in_buffer.timeStamp = avpkt->pts;
++
++    status = decodeBuffer(avctx, &in_buffer);
++    if(status != DECODE_SUCCESS)
++        return -1;
++    // get an output buffer from yami
++    if (!(avpkt->data))
++        s->decoder->flush();
++
++    frame = s->decoder->getOutput();
++    if (!frame) {
++        return avpkt->size;
++    }
++    // process the output frame
++    memset(&get_frame, 0, sizeof(get_frame));
++    get_frame.format = AV_PIX_FMT_VAAPI_VLD;
++    get_frame.width  = avctx->width;
++    get_frame.height = avctx->height;
++
++    AVFrame *vframe = (AVFrame *)data;
++    if (avctx->get_buffer2 != avcodec_default_get_buffer2)
++    {
++        if(avctx->get_buffer2(avctx, &get_frame, 1) < 0)
++            return -1;
++        memcpy(data, &get_frame, sizeof(AVFrame));
++        //vframe->data[3]= (uint8_t *)(out_frame->surface);
++        vframe->width = avctx->width;
++        vframe->height = avctx->height;
++        vframe->key_frame = 1;
++        vframe->format = AV_PIX_FMT_VAAPI_VLD;
++        vframe->pts = vframe->pkt_pts;
++        vframe->pkt_pts = frame->timeStamp;
++
++        vframe->extended_data = vframe->data;
++        SharedPtr<VideoFrame> src_frame(new VideoFrame);
++        memset(src_frame.get(), 0, sizeof(VideoFrame));
++        src_frame->surface = (intptr_t)(frame->surface);
++
++        SharedPtr<VideoFrame> dst_frame(new VideoFrame);
++        memset(dst_frame.get(), 0, sizeof(VideoFrame));
++        dst_frame->surface = (intptr_t)(vframe->data[3]);
++
++        ret = s->vpp->process(src_frame, dst_frame);
++    }
++    //s->decoder->renderDone(out_frame);
++    *got_frame = 1;
++    s->render_count++;
++    assert(data->buf[0] || !*got_frame);
++
++    return avpkt->size;
++}
++
++
++static av_cold int yami_close(AVCodecContext *avctx)
++{
++    YamiContext *s = (YamiContext*)avctx->priv_data;
++
++    if (s->decoder) {
++        s->decoder->stop();
++    }
++    return 0;
++}
++
++static av_cold void yami_flush(AVCodecContext *avctx)
++{
++    YamiContext *s = (YamiContext*)avctx->priv_data;
++    Decode_Status status;
++
++    yami_close(avctx);
++    yami_init(avctx);
++}
++
++AVCodec ff_libyami_h264_decoder = {
++    .name                   ="h264",// "libyami_h264",
++    .long_name              = NULL_IF_CONFIG_SMALL("libyami H.264"),
++    .type                   = AVMEDIA_TYPE_VIDEO,
++    .id                     = AV_CODEC_ID_H264,
++    .capabilities           = CODEC_CAP_DELAY, // it is not necessary to support multi-threads
++    .supported_framerates   = NULL,
++    .pix_fmts               = NULL,
++    .supported_samplerates  = NULL,
++    .sample_fmts            = NULL,
++    .channel_layouts        = NULL,
++#if FF_API_LOWRES
++    .max_lowres             = 0,
++#endif
++    .priv_class             = NULL,
++    .profiles               = NULL,
++    .priv_data_size         = sizeof(YamiContext),
++    .next                   = NULL,
++    .init_thread_copy       = NULL,
++    .update_thread_context  = NULL,
++    .defaults               = NULL,
++    .init_static_data       = NULL,
++    .init                   = yami_init,
++    .encode_sub             = NULL,
++    .encode2                = NULL,
++    .decode                 = yami_decode_frame,
++    .close                  = yami_close,
++    .flush                  = yami_flush,//NULL, // TODO, add it
++};
++
++AVCodec ff_libyami_hevc_decoder = {
++    .name                   ="hevc",// "libyami_h264",
++    .long_name              = NULL_IF_CONFIG_SMALL("libyami HEVC"),
++    .type                   = AVMEDIA_TYPE_VIDEO,
++    .id                     = AV_CODEC_ID_HEVC,
++    .capabilities           = CODEC_CAP_DELAY, // it is not necessary to support multi-threads
++    .supported_framerates   = NULL,
++    .pix_fmts               = NULL,
++    .supported_samplerates  = NULL,
++    .sample_fmts            = NULL,
++    .channel_layouts        = NULL,
++#if FF_API_LOWRES
++    .max_lowres             = 0,
++#endif
++    .priv_class             = NULL,
++    .profiles               = NULL,
++    .priv_data_size         = sizeof(YamiContext),
++    .next                   = NULL,
++    .init_thread_copy       = NULL,
++    .update_thread_context  = NULL,
++    .defaults               = NULL,
++    .init_static_data       = NULL,
++    .init                   = yami_init,
++    .encode_sub             = NULL,
++    .encode2                = NULL,
++    .decode                 = yami_decode_frame,
++    .close                  = yami_close,
++    .flush                  = yami_flush,//NULL, // TODO, add it
++};
+-- 
+1.9.1
+
