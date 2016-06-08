@@ -7,3 +7,9 @@ build steps:
 3. build ffmpeg (with yami patches): "make ffmpeg"
    by default, ffmpeg is installed to /opt/ffmpeg
 4. build the example player: "make player"
+
+
+###relicense
+At 2016/6/8, we relicense libyami from LGPL to Apache V2. You need passing --enable-version3 to ffmpeg and dynamic link libyami to make license compatible.
+You can refer to http://ffmpeg.org/general.html#OpenCORE_002c-VisualOn_002c-and-Fraunhofer-libraries for details.
+You can use old LGPL licensed libyami at https://github.com/01org/libyami/tree/master. But we freezed it as 0.3.2.
