@@ -13,3 +13,6 @@ build steps:
 At 2016/6/8, we relicense libyami from LGPL to Apache V2. You need passing --enable-version3 to ffmpeg and dynamic link libyami to make license compatible.
 You can refer to http://ffmpeg.org/general.html#OpenCORE_002c-VisualOn_002c-and-Fraunhofer-libraries for details.
 You can use old LGPL licensed libyami at https://github.com/01org/libyami/tree/master. But we freezed it as 0.3.2.
+
+###deprecated
+We abandon this project since we have a better replacement. Please use https://github.com/01org/ffmpeg_libyami for ffmpeg integration.
